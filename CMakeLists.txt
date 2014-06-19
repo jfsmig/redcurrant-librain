@@ -72,6 +72,19 @@ include_directories(AFTER ${JERASURE_INCLUDE_DIRS})
 
 link_directories(${JERASURE_LIBRARY_DIRS})
 
+add_library(Jerasure STATIC
+		jerasure/cauchy_best_r6.c
+		jerasure/cauchy.c
+		jerasure/cauchy.h
+		jerasure/galois.c
+		jerasure/galois.h
+		jerasure/jerasure.c
+		jerasure/jerasure.h
+		jerasure/liberation.c
+		jerasure/liberation.h
+		jerasure/reed_sol.c
+		jerasure/reed_sol.h)
+
 add_library(rain SHARED librain.c)
 set_target_properties(rain PROPERTIES
 		PUBLIC_HEADER "librain.h")
