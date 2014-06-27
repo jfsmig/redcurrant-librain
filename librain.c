@@ -105,13 +105,12 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 		bit_matrix = jerasure_matrix_to_bitmatrix(enc->k, enc->m, enc->w, matrix);
 	}
 
-	unsigned int sum = enc->k + enc->m;
+	/* Finding erased chunks */
+	const unsigned int sum = enc->k + enc->m;
 	int erased[sum], erasures[sum];
+	unsigned int num_erased = 0;
 	memset(erased, -1, sizeof(int)*(sum));
 	memset(erasures, -1, sizeof(int)*(sum));
-
-	/* Finding erased chunks */
-	unsigned int num_erased = 0;
 	for (unsigned int i = 0; i < enc->k; i++) {
 		if (data[i] == NULL) {
 			erased[i] = 1;
@@ -126,7 +125,7 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 			num_erased++;
 		}
 	}
-	if (num_erased > enc->m) // situation not recoverable
+	if (num_erased > enc->m) // so sad ... not recoverable
 		return EXIT_FAILURE;
 
 	/* Now allocate data & coding for missing parts */
