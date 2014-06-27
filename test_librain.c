@@ -75,17 +75,21 @@ test_encoding (size_t length, const char *algo,
 			diff.tv_nsec = post.tv_nsec - pre.tv_nsec;
 		}
 
+		size_t elapsed = ((1000000000 * diff.tv_sec) + diff.tv_nsec) / 1000;
+		double overhead = (double)((k+m)*enc.block_size) / (double) enc.data_size;
+		double throughput = ((double) enc.data_size / (double) elapsed) * 1000000.0;
+		static const double DGiB = 1.0 * (1024 * MiB);
+
 		fprintf(stderr, "%s %u %u W=%u PS=%lu s=%lu"
 				" DS=%lu PDS=%lu BS=%lu"
-				" %f %lu.%09lu\n",
+				" %f %lu %f\n",
 				algo, k, m , enc.w, enc.packet_size, enc.strip_size,
 				enc.data_size, enc.padded_data_size, enc.block_size,
-				(double)((k+m)*enc.block_size) / (double) enc.data_size,
-				diff.tv_sec, diff.tv_nsec);
+				overhead, elapsed, throughput / DGiB);
 	} else {
 		fprintf(stderr, "%s %u %u W=%u PS=%lu s=%lu"
 				" DS=%lu PDS=%lu BS=%lu"
-				" - -\n",
+				" - - -\n",
 				algo, k, m , enc.w, enc.packet_size, enc.strip_size,
 				enc.data_size, enc.padded_data_size, enc.block_size);
 	}
