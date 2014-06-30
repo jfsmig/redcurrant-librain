@@ -5,14 +5,6 @@
 #include "./librain.h"
 #include "./test_utils.h"
 
-static inline unsigned int
-_count_positives (int *tab)
-{
-	unsigned int count = 0;
-	for (; tab[count]>= 0 ;++count) {}
-	return count;
-}
-
 static const char *
 _algo_to_str (enum rain_algorithm_e algo)
 {

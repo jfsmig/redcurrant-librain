@@ -59,4 +59,6 @@ _count_bits (register size_t c)
 	return c;
 }
 
+char* strdup_printf(const char *fmt, ...);
+
 #endif // LIBRAIN_utils_h

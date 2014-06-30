@@ -55,4 +55,12 @@ _elapsed_msec (struct timespec pre, struct timespec post)
 	return 1000 * diff.tv_sec + _upper_multiple (diff.tv_nsec, 1000000) / 1000000;
 }
 
+static inline unsigned int
+_count_positives (int *tab)
+{
+	unsigned int count = 0;
+	for (; tab[count]>= 0 ;++count) {}
+	return count;
+}
+
 #endif // LIBRAIN_test_utils_h
