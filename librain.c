@@ -1,515 +1,271 @@
 #include <stdlib.h>
+#include <assert.h>
 #include <string.h>
+#include <errno.h>
 
 #include <jerasure/jerasure.h>
 #include <jerasure/liberation.h>
 #include <jerasure/cauchy.h>
 #include <jerasure/galois.h>
 #include <jerasure/reed_sol.h>
+
 #include "librain.h"
+#include "utils.h"
 
-int
-get_overhead_percentage(int raw_data_size, int k, int chunk_size,
-		const char* algo)
-{
-	/* Checking input values */
-	if (1 > raw_data_size || NULL == algo || 1 > k || chunk_size < 1)
-		return -1;
-	/* ------- */
-
-	/* Forcing the best input parameters values */
-	if (!strcmp("liber8tion", algo)) {
-		if (k < 2)
-			k = 2;
-		else if (k > 7)
-			k = 7;
-	}
-	else if (strcmp("crs", algo))
-		return -1;
-	/* ------- */
-
-	return (((k * chunk_size) - raw_data_size) * 100) / raw_data_size;
-}
+static struct rain_env_s env_DEFAULT = { malloc, calloc, free };
 
 static int
-get_best_crs_w_value(int k, int m)
+encoding_prepare (struct rain_encoding_s *enc,
+		const char *algo, unsigned int k, unsigned int m,
+		size_t length)
 {
-	if (1 > k || 1 > m || k < m)
-		return -1;
+	assert(algo != NULL);
+	assert(k > 0);
+	assert(m > 0);
+	assert(enc != NULL);
 
-	int ref = k + m - 1;
-	int power = 1;
-	int product = 2;
+	memset(enc, 0, sizeof(struct rain_encoding_s));
 
-	while (product < ref) {
-		product *= 2;
-		power++;
-	}
-
-	return power + 1;
-}
-
-static int
-get_best_packet_size_value(int raw_data_size, int k, int w)
-{
-	if (raw_data_size <= 0 || k <= 0)
-		return -1;
-
-	int size = raw_data_size / k;
-	int packet_size = w;
-
-	if (1 != size) {
-		int parity = 0;
-		if (size % 2 != 0)
-			parity = 1;
-
-		if (!parity) {
-			int diviz = size;
-			while (1 < (diviz /= 2))
-				packet_size++;
-		}
-		else {
-			int diviz = size;
-			do {
-				packet_size++;
-			}
-			while (1 < (diviz /= 2));
-		}
-
-		while (packet_size % w != 0)
-			packet_size++;
-	}
-
-	int pow_value = 2;
-	while (pow_value < packet_size)
-		pow_value *= 2;
-
-	packet_size = pow_value;
-
-	return packet_size;
-}
-
-static int
-check_and_force_input_parameters(const char* algo, int raw_data_size,
-		int* k, int* m, int* w, int* packet_size, int* buffer_size)
-{
     if (!strcmp("liber8tion", algo)) {
-        *w = 8;
-        if (*m != 2)
-            *m = 2;
-        if (*k < 2)
-            *k = 2;
-        else if (*k > 7)
-            *k = 7;
+        if (m != 2 || k < 2 || k > 7) {
+			errno = EINVAL;
+            return 0;
+		}
+		enc->algo = JALG_liberation;
     }
     else if (!strcmp("crs", algo)) {
-        if (-1 == (*w = get_best_crs_w_value(*k, *m)))
-            return EXIT_FAILURE;
+		enc->algo = JALG_crs;
     }
-    else
-        return EXIT_FAILURE;
+    else {
+		errno  = EINVAL;
+        return 0;
+	}
 
-    *packet_size = get_best_packet_size_value(raw_data_size, *k, *w);
-    /**packet_size = PACKET_VALUE;*/
-    *buffer_size = BUFFER_VALUE;
+	enc->data_size = length;
+	enc->k = k;
+	enc->m = m;
 
-    return EXIT_SUCCESS;
+	// Set "w" and "packet_size" : for erasure codes computations, the data
+	// is divided into "k" blocks and each block is divided into "s" strips.
+	// Each strip is then computed as "w" packets of size "packet_size" (PS).
+	// The <w,PS> combination has to be decided the empiric way (after
+	// benchmarks) because the result can vary a lot, depending on the CPU's
+	// architecture, CPU caches, etc.
+	// cf. https://www.usenix.org/legacy/events/fast09/tech/full_papers/plank/plank_html/
+
+	if (enc->algo == JALG_liberation) {
+		enc->w = 8;
+	} else if (enc->algo == JALG_crs) {
+		enc->w = 4;
+	}
+
+	for (enc->packet_size=2048; enc->packet_size>=64 ; enc->packet_size/=2) {
+
+		enc->strip_size = enc->packet_size * enc->w;
+		const size_t ks = enc->k * enc->strip_size;
+		enc->padded_data_size = _upper_multiple(enc->data_size, ks);
+		enc->block_size = enc->padded_data_size / enc->k;
+
+		// More than a block of padding ?
+		if ((enc->padded_data_size != enc->data_size)
+			&& (enc->data_size < (enc->padded_data_size - enc->block_size)))
+				continue;
+		return 1;
+	}
+
+	return 0;
 }
 
-static int
-buffer_size_calculation(int w, int k, int packet_size, int buffer_size)
+/* ------------------------------------------------------------------------- */
+
+int
+rain_get_encoding (struct rain_encoding_s *encoding, size_t rawlength,
+		unsigned int k, unsigned int m, const char *algo)
 {
-    if (buffer_size != 0) {
-        if ((packet_size != 0) && (buffer_size % (sizeof(int) * w * k * packet_size) != 0)) {
-            int up = buffer_size;
-            int down = buffer_size;
-            while ((up % (sizeof(int) * w * k * packet_size) != 0) && (down % (sizeof(int) * w * k * packet_size) != 0)) {
-                up++;
-                if (down == 0)
-                    down--;
-            }
-            if (up % (sizeof(int) * w * k * packet_size) == 0)
-                buffer_size = up;
-            else {
-                if (down != 0)
-                    buffer_size = down;
-            }
-        }
-        else if ((packet_size == 0) && (buffer_size % (sizeof(int) * w * k) != 0)) {
-            int up = buffer_size;
-            int down = buffer_size;
-            while ((up % (sizeof(int) * w * k) != 0) && (down % (sizeof(int) * w * k) != 0)) {
-                up++;
-                down--;
-            }
-            if (up % (sizeof(int) * w * k) == 0)
-                buffer_size = up;
-            else
-                buffer_size = down;
-        }
-    }
-
-	return buffer_size;
-}
-
-static int
-new_size_calculation(int w, int k, int packet_size, int buffer_size,
-		int raw_data_size)
-{
-	int new_size = raw_data_size;
-
-	if (packet_size != 0) {
-		if (raw_data_size % (k * w * packet_size * sizeof(int)) != 0) {
-			while (new_size % (k * w * packet_size * sizeof(int)) != 0)
-				new_size++;
-		}
-	}
-	else {
-		if (raw_data_size % (k * w * sizeof(int)) != 0) {
-			while (new_size % (k * w * sizeof(int)) != 0)
-				new_size++;
-		}
-	}
-
-	if (buffer_size != 0) {
-		while (new_size % buffer_size != 0)
-			new_size++;
-	}
-
-	return new_size;
+	assert(encoding != NULL);
+	return encoding_prepare(encoding, algo, k, m, rawlength);
 }
 
 int
-get_chunk_size(int raw_data_size, int k, int m, const char* algo)
+rain_rehydrate(uint8_t **data, uint8_t **coding,
+		struct rain_encoding_s *enc, struct rain_env_s *env)
 {
-	/* Checking input values */
-	if (1 > raw_data_size || NULL == algo || 1 > k || 1 > m || k < m)
-		return -1;
-	/* ------- */
-
-	/* Forcing the best input parameters values */
-	int w;
-	int packet_size;
-	int buffer_size;
-	if (EXIT_FAILURE == check_and_force_input_parameters(algo, raw_data_size, &k, &m, &w, &packet_size, &buffer_size))
-		return -1;
-	/* ------- */
-
-	/* Determining proper buffersize by finding the closest valid buffersize to the input value  */
-	buffer_size = buffer_size_calculation(w, k, packet_size, buffer_size);
-	/* ------- */
-
-	/* Finding the new size by determining the next closest multiple */
-	int new_size = new_size_calculation(w, k, packet_size, buffer_size, raw_data_size);
-	/* ------- */
-
-	/* Determining size of k + m files */
-	int block_size = new_size / k;
-	/* ------- */
-
-	return block_size;
-}
-
-char*
-rain_repair_and_get_raw_data(char** data, char** coding, int raw_data_size, int k, int m, const char* algo)
-{
-	/* Checking input values */
-	if (NULL == data || NULL == coding || 1 > raw_data_size || NULL == algo || 1 > k || 1 > m || k < m)
-		return NULL;
-	/* ------- */
-
-	/* Forcing the best input parameters values */
-	int w;
-	int packet_size;
-	int buffer_size;
-	if (EXIT_FAILURE == check_and_force_input_parameters(algo, raw_data_size, &k, &m, &w, &packet_size, &buffer_size))
-		return NULL;
-	/* ------- */
-
-	/* Determining proper buffersize by finding the closest valid buffersize to the input value  */
-	buffer_size = buffer_size_calculation(w, k, packet_size, buffer_size);
-	/* ------- */
-
-	/* Finding the new size by determining the next closest multiple */
-	int new_size = new_size_calculation(w, k, packet_size, buffer_size, raw_data_size);
-	/* ------- */
-
-	/* Determining size of k + m files */
-	int block_size = new_size / k;
-	/* ------- */
-
-	/* Allocating memory */
-	int* erased = (int *)calloc(k + m, sizeof(int));
-	int* erasures = (int *)calloc(k + m, sizeof(int));
-
-	char** temp_data = (char **)calloc(k, sizeof(char *));
-	char** temp_coding = (char **)calloc(m, sizeof(char *));
-
-	int i;
-
-	/*for (i = 0; i < k; i++)
-		temp_data[i] = (char *)calloc(raw_data_size / k, sizeof(char));
-	for (i = 0; i < m; i++)
-		temp_coding[i] = (char *)calloc(raw_data_size / k, sizeof(char));*/
-	/* ------- */
+	assert(data != NULL);
+	assert(coding != NULL);
+	assert(enc != NULL);
+	if (!env)
+		env = &env_DEFAULT;
 
 	/* Creating coding matrix or bitmatrix */
-	int* bit_matrix = NULL;
-	int* matrix;
-	if (!strcmp("liber8tion", algo))
-		bit_matrix = liber8tion_coding_bitmatrix(k);
-	else if (!strcmp("crs", algo)) {
-		matrix = cauchy_good_general_coding_matrix(k, m, w);
-		bit_matrix = jerasure_matrix_to_bitmatrix(k, m, w, matrix);
+	int *bit_matrix=NULL, *matrix=NULL;
+	if (enc->algo == JALG_liberation)
+		bit_matrix = liber8tion_coding_bitmatrix(enc->k);
+	else if (enc->algo == JALG_crs) {
+		matrix = cauchy_good_general_coding_matrix(enc->k, enc->m, enc->w);
+		bit_matrix = jerasure_matrix_to_bitmatrix(enc->k, enc->m, enc->w, matrix);
 	}
-	/* ------- */
-
-	/* Allocating memory for output file reconstruction */
-	char* output_file = (char *)calloc(new_size, sizeof(char));
-	/* ------- */
 
 	/* Finding erased chunks */
-	int num_erased = 0;
-	for (i = 0; i < k; i++) {
+	const unsigned int sum = enc->k + enc->m;
+	int erased[sum], erasures[sum];
+	unsigned int num_erased = 0;
+	memset(erased, -1, sizeof(int)*(sum));
+	memset(erasures, -1, sizeof(int)*(sum));
+	for (unsigned int i = 0; i < enc->k; i++) {
 		if (data[i] == NULL) {
 			erased[i] = 1;
 			erasures[num_erased] = i;
 			num_erased++;
 		}
 	}
-
-	for (i = 0; i < m; i++) {
+	for (unsigned int i = 0; i < enc->m; i++) {
 		if (coding[i] == NULL) {
-			erased[k + i] = 1;
-			erasures[num_erased] = k + i;
+			erased[enc->k + i] = 1;
+			erasures[num_erased] = enc->k + i;
 			num_erased++;
 		}
 	}
+	if (num_erased > enc->m) // so sad ... not recoverable
+		return EXIT_FAILURE;
 
-	erasures[num_erased] = -1;
-
-	if (num_erased > m) {
-		if (erasures != NULL)
-			free(erasures);
-		if (erased != NULL)
-			free(erased);
-
-		if (temp_data != NULL) {
-			for (i = 0; i < k; i++) {
-				if (temp_data[i] != NULL)
-					free(temp_data[i]);
-			}
-			free(temp_data);
-		}
-		if (temp_coding != NULL) {
-			for (i = 0; i < m; i++) {
-				if (temp_coding[i] != NULL)
-					free(temp_coding[i]);
-			}
-			free(temp_coding);
-		}
-		if (output_file != NULL)
-			free(output_file);
-
-		return NULL;
-	}
-	/* ------- */
-
-	/* Open files, check for erasures, read in data/coding */
-	for (i = 0; i < k; i++) {
-		if (erased[i] != 1) {
-			temp_data[i] = (char *)calloc(block_size, sizeof(char));
-			memcpy(temp_data[i], data[i], block_size);
+	/* Now allocate data & coding for missing parts */
+	for (unsigned int i=0; i < num_erased; i++) {
+		unsigned int idx = (unsigned int) erasures[i];
+		uint8_t *block = (uint8_t*) env->calloc(enc->block_size, sizeof(uint8_t));
+		if (enc->k > idx) {
+			assert(data[idx] == NULL);
+			data[idx] = block;
+		} else {
+			assert(coding[idx] == NULL);
+			coding[idx - enc->k] = block;
 		}
 	}
-	for (i = 0; i < m; i++) {
-		if (erased[k + i] != 1) {
-			temp_coding[i] = (char *)calloc(block_size, sizeof(char));
-			memcpy(temp_coding[i], coding[i], block_size);
-		}
-	}
-	/* ------- */
-
-	/* Finish allocating data/coding if needed */
-	for (i = 0; i < num_erased; i++) {
-		if (erasures[i] < k) {
-			if (temp_data[erasures[i]])
-				free(temp_data[erasures[i]]);
-			temp_data[erasures[i]] = (char *)calloc(block_size, sizeof(char));
-		}
-		else {
-			if (temp_coding[erasures[i] - k])
-				free(temp_coding[erasures[i] - k]);
-			temp_coding[erasures[i] - k] = (char *)calloc(block_size, sizeof(char));
-		}
-	}
-	/* ------- */
 
 	/* Choose proper decoding method */
-	jerasure_schedule_decode_lazy(k, m, w, bit_matrix, erasures, temp_data, temp_coding, block_size, packet_size, 1);
-	/* ------- */
-
-	/* Create decoded data */
-	for (i = 0; i < k; i++) {
-		if (erased[i] == 1) {
-			if (data[i] == NULL)
-				data[i] = (char *)calloc(block_size, sizeof(char));
-			memcpy(data[i], temp_data[i], block_size);
-		}
-
-		memcpy(output_file + i * block_size, temp_data[i], block_size);
-	}
-
-	for (i = 0; i < m; i++) {
-		if (erased[k + i] == 1) {
-			if (coding[i] == NULL)
-				coding[i] = (char *)calloc(block_size, sizeof(char));
-			memcpy(coding[i], temp_coding[i], block_size);
-		}
-	}
-	/* ------- */
+	jerasure_schedule_decode_lazy(enc->k, enc->m, enc->w,
+			bit_matrix, erasures, (char**)data, (char**)coding,
+			enc->block_size, enc->packet_size, 1);
 
 	/* Freeing previously allocated memory */
-	if (erasures != NULL)
-		free(erasures);
-	if (erased != NULL)
-		free(erased);
-	if (temp_data != NULL) {
-		for (i = 0; i < k; i++) {
-			if (temp_data[i] != NULL)
-				free(temp_data[i]);
-		}
-		free(temp_data);
-	}
-	if (temp_coding != NULL) {
-		for (i = 0; i < m; i++) {
-			if (temp_coding[i] != NULL)
-				free(temp_coding[i]);
-		}
-		free(temp_coding);
-	}
 	if (bit_matrix)
 		free(bit_matrix);
-	/* ------- */
+	if (matrix)
+		free(matrix);
 
-	return output_file;
+	return 1;
 }
 
-char**
-rain_get_coding_chunks(char* raw_data, int raw_data_size, int k, int m, const char* algo)
+int
+rain_encode (uint8_t *rawdata, size_t rawlength,
+		struct rain_encoding_s *encoding, struct rain_env_s *env,
+		uint8_t **out)
 {
-	/* Checking input values */
-	if (NULL == raw_data || 1 > raw_data_size || NULL == algo || 1 > k || 1 > m || k < m)
-		return NULL;
-	/* ------- */
+	assert(encoding != NULL);
+	assert(rawdata != NULL);
+	assert(rawlength > 0);
 
-	/* Forcing the best input parameters values */
-	int w;
-	int packet_size;
-	int buffer_size;
-	if (EXIT_FAILURE == check_and_force_input_parameters(algo, raw_data_size, &k, &m, &w, &packet_size, &buffer_size))
-		return NULL;
-	/* ------- */
+	if (!env)
+		env = &env_DEFAULT;
 
-	/* Determining proper buffersize by finding the closest valid buffersize to the input value  */
-	buffer_size = buffer_size_calculation(w, k, packet_size, buffer_size);
-	/* ------- */
-
-	/* Finding the new size by determining the next closest multiple */
-    int new_size = new_size_calculation(w, k, packet_size, buffer_size, raw_data_size);
-    /* ------- */
-
-	/* Determining size of k + m files */
-	int block_size = new_size / k;
-	/* ------- */
-
-	/* Allocating memory for buffer */
-	char* block = (char *)calloc(new_size, sizeof(char));
-	/* ------- */
-
-	/* Allocating memory for data and coding */
-	char** data = (char **)calloc(k, sizeof(char*));
-	char** coding = (char **)calloc(m, sizeof(char*));
-	int i;
-	for (i = 0; i < m; i++)
-		coding[i] = (char *)calloc(block_size, sizeof(char));
-	/* ------- */
-
-	/* Creating coding matrix or bitmatrix and schedule */
-	int* bit_matrix = NULL;
-	int* matrix = NULL;
-	int** schedule = NULL;
-	if (!strcmp("liber8tion", algo)) {
-		bit_matrix = liber8tion_coding_bitmatrix(k);
-		schedule = jerasure_smart_bitmatrix_to_schedule(k, m, w, bit_matrix);
+	// Prepare the jerasure structures
+	int *bit_matrix=NULL, *matrix=NULL, **schedule=NULL;
+	if (encoding->algo == JALG_liberation) {
+		matrix = NULL;
+		bit_matrix = liber8tion_coding_bitmatrix(encoding->k);
+		schedule = jerasure_smart_bitmatrix_to_schedule(encoding->k, encoding->m,
+				encoding->w, bit_matrix);
 	}
-	else if (!strcmp("crs", algo)) {
-		matrix = cauchy_good_general_coding_matrix(k, m, w);
-		bit_matrix = jerasure_matrix_to_bitmatrix(k, m, w, matrix);
-		schedule = jerasure_smart_bitmatrix_to_schedule(k, m, w, bit_matrix);
+	else if (encoding->algo == JALG_crs) {
+		matrix = cauchy_good_general_coding_matrix(
+				encoding->k, encoding->m, encoding->w);
+		bit_matrix = jerasure_matrix_to_bitmatrix(
+				encoding->k, encoding->m, encoding->w, matrix);
+		schedule = jerasure_smart_bitmatrix_to_schedule(
+				encoding->k, encoding->m, encoding->w, bit_matrix);
 	}
-	/* ------- */
 
-	/* Allocating final results */
-	char** final_data = (char **)calloc(k, sizeof(char*));
-	for (i = 0; i < k; i++)
-		final_data[i] = (char *)calloc(block_size, sizeof(char));
-	char** final_coding = (char **)calloc(m, sizeof(char*));
-	for (i = 0; i < m; i++)
-		final_coding[i] = (char *)calloc(block_size, sizeof(char));
-	/* ------- */
+	// Prepare the empty parity blocks
+	uint8_t *parity [encoding->m];
+	for (unsigned int i=0; i < encoding->m ;++i) 
+		parity[i] = (uint8_t*) env->calloc(sizeof(uint8_t), encoding->block_size);
 
-	/* Checking if padding is needed */
-	for (i = 0; i < k; i++) {
-		int temp_block_size = block_size;
-		if (i * block_size + block_size > raw_data_size)
-			temp_block_size = raw_data_size - i * block_size;
-
-		if (temp_block_size > 0)
-			memcpy(block + (i * block_size), raw_data + i * block_size, temp_block_size);
+	// Prepare the data blocks (no copy, point to the original)
+	uint8_t *data [encoding->k];
+	size_t srcoffset = 0;
+	for (unsigned int i=0; i < encoding->k ;++i) {
+		data[i] = rawdata + srcoffset;
+		srcoffset += encoding->block_size;
 	}
-	/* ------- */
 
-	/* Setting pointers to point to data */
-	for (i = 0; i < k; i++)
-		data[i] = block + (i * block_size);
-	/* ------- */
+	// If a padding is  necessary, replace the last data block
+	// with a padded copy (no way to check if the original copy
+	// is long enough.
 
-	/* Encoding */
-	jerasure_schedule_encode(k, m, w, schedule, data, coding, block_size, packet_size);
-	/* ------- */
+	uint8_t *last_with_padding = NULL;
+	size_t tail_length = rawlength % encoding->block_size;
+	if (tail_length != 0) {
+		size_t tail_offset = _lower_multiple(rawlength, encoding->block_size);
+		last_with_padding = (uint8_t*) env->calloc(encoding->block_size, sizeof(uint8_t));
+		assert(last_with_padding != NULL);
 
-	/* Writing data and encoded data to k + m memory slots */
-	for (i = 0; i < k; i++)
-		memcpy(final_data[i], data[i], block_size);
-	for (i = 0; i < m; i++)
-		memcpy(final_coding[i], coding[i], block_size);
-	/* ------- */
-
-	/* Freeing previously allocated memory */
-	if (block != NULL)
-		free(block);
-	if (data != NULL)
-		free(data);
-	if (coding != NULL) {
-		for (i = 0; i < m; i++) {
-			if (coding[i] != NULL)
-				free(coding[i]);
-		}
-		free(coding);
+		memcpy(last_with_padding, rawdata+tail_offset, tail_length);
+		data[encoding->k-1] = last_with_padding;
 	}
-	if (final_data != NULL) {
-		for (i = 0; i < k; i++) {
-			if (final_data[i] != NULL)
-				free(final_data[i]);
-		}
-		free(final_data);
-	}
+
+	// Compute now ... damned, no return code to check
+	jerasure_schedule_encode(encoding->k, encoding->m, encoding->w, schedule,
+			(char**) data, (char**) parity,
+			encoding->block_size, encoding->packet_size);
+
+	// Free allocated structures
+	if (last_with_padding)
+		env->free(last_with_padding);
 	if (schedule)
 		jerasure_free_schedule(schedule);
 	if (bit_matrix)
 		free(bit_matrix);
-	/* ------- */
+	if (matrix)
+		free(matrix);
 
-	return final_coding;
+	for (unsigned int i=0; i<encoding->m ;++i)
+		out[i] = parity[i];
+
+	return 1;
 }
+
+#ifndef HAVE_NOLEGACY
+/* ------------------------------------------------------------------------- */
+
+uint8_t**
+rain_get_coding_chunks(uint8_t *data, size_t length,
+		unsigned int k, unsigned int m, const char* algo)
+{
+	if (length == 0)
+		return NULL;
+
+	struct rain_encoding_s encoding;
+	if (!encoding_prepare(&encoding, algo, k, m, length))
+		return NULL;
+
+	uint8_t *out[m];
+	if (!rain_encode(data, length, &encoding, &env_DEFAULT, out))
+		return NULL;
+
+	uint8_t **result = malloc(m * sizeof(uint8_t*));
+	memcpy(result, out, m * sizeof(uint8_t*));
+	return result;
+}
+
+int
+rain_repair_and_get_raw_data(uint8_t **data, uint8_t **coding,
+		size_t rawlength, unsigned int k, unsigned int m,
+		const char* algo)
+{
+	struct rain_encoding_s enc;
+	if (!encoding_prepare(&enc, algo, k, m, rawlength))
+		return EXIT_FAILURE;
+	int rc = rain_rehydrate(data, coding, &enc, &env_DEFAULT);
+	return MACRO_COND(rc!=0,EXIT_SUCCESS,EXIT_FAILURE);
+}
+
+#endif
