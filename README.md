@@ -9,8 +9,8 @@ Considering your installation with
   * Jerasure headers installed in a path stored in JINC
   * Jerasure libraries insatlled in a path stored in JLIB
 
-  cd $TMPDIR
-  cmake -DJERASURE_INCDIR=$JINC -DJERASURE_LIBDIR=$JLIB -DPREFIX=... $SRCDIR
-  make
-  make install
+    cd $TMPDIR
+    cmake -DJERASURE_INCDIR=$JINC -DJERASURE_LIBDIR=$JLIB -DPREFIX=... $SRCDIR
+    make
+    make install
 
