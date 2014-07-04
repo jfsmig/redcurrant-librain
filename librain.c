@@ -268,4 +268,23 @@ rain_repair_and_get_raw_data(uint8_t **data, uint8_t **coding,
 	return MACRO_COND(rc!=0,EXIT_SUCCESS,EXIT_FAILURE);
 }
 
+int
+get_overhead_percentage(int raw_data_size, int k, int chunk_size,
+		const char* algo)
+{
+	(void) algo;
+	return ((k * chunk_size) * 100) / raw_data_size;
+}
+
+int
+get_chunk_size(int length, int k, int m, const char* algo)
+{
+	struct rain_encoding_s enc;
+	if (length < 0 || k < 0 || m < 0)
+		return -1;
+	if (!encoding_prepare(&enc, algo, k, m, length))
+		return -1;
+	return enc.block_size;
+}
+
 #endif

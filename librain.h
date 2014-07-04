@@ -73,6 +73,13 @@ int rain_repair_and_get_raw_data (uint8_t **data, uint8_t **coding,
 uint8_t** rain_get_coding_chunks (uint8_t* raw_data, size_t raw_data_size,
 		unsigned int k, unsigned int m,
 		const char* algo);
+
+int get_chunk_size(int raw_data_size, int k, int m, const char* algo);
+
+// TODO FIXME Why is here no 'm' ?
+int get_overhead_percentage(int raw_data_size, int k, int chunk_size,
+		const char* algo);
+
 #endif
 
 #ifdef __cplusplus
