@@ -59,21 +59,31 @@ encoding_prepare (struct rain_encoding_s *enc,
 		enc->w = 4;
 	}
 
-	for (enc->packet_size=2048; enc->packet_size>=64 ; enc->packet_size/=2) {
+	// Retry with intermediate values (this loop can be optimized)
+	for (size_t start = 2048; start >= 1280; start -= 256) {
+		for (size_t p_size = start; p_size >= 64; p_size /= 2) {
+			enc->packet_size = p_size;
+			enc->strip_size = enc->packet_size * enc->w;
+			const size_t ks = enc->k * enc->strip_size;
+			enc->padded_data_size = _upper_multiple(enc->data_size, ks);
+			enc->block_size = enc->padded_data_size / enc->k;
 
-		enc->strip_size = enc->packet_size * enc->w;
-		const size_t ks = enc->k * enc->strip_size;
-		enc->padded_data_size = _upper_multiple(enc->data_size, ks);
-		enc->block_size = enc->padded_data_size / enc->k;
-
-		// More than a block of padding ?
-		if ((enc->padded_data_size != enc->data_size)
-			&& (enc->data_size < (enc->padded_data_size - enc->block_size)))
-				continue;
-		return 1;
+			// More than a block of padding ?
+			if ((enc->padded_data_size != enc->data_size)
+				&& (enc->data_size < (enc->padded_data_size - enc->block_size)))
+					continue;
+			return 1;
+		}
 	}
 
-	return 0;
+	// We will have more than one block of padding, but it will work
+	enc->packet_size = 64;
+	enc->strip_size = enc->packet_size * enc->w;
+	const size_t ks = enc->k * enc->strip_size;
+	enc->padded_data_size = _upper_multiple(enc->data_size, ks);
+	enc->block_size = enc->padded_data_size / enc->k;
+
+	return 1;
 }
 
 /* ------------------------------------------------------------------------- */
@@ -109,14 +119,21 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 	const unsigned int sum = enc->k + enc->m;
 	int erased[sum], erasures[sum];
 	unsigned int num_erased = 0;
+	size_t cur_size = 0;
 	memset(erased, -1, sizeof(int)*(sum));
 	memset(erasures, -1, sizeof(int)*(sum));
 	for (unsigned int i = 0; i < enc->k; i++) {
 		if (data[i] == NULL) {
-			erased[i] = 1;
-			erasures[num_erased] = i;
-			num_erased++;
+			if (cur_size < enc->data_size) {
+				erased[i] = 1;
+				erasures[num_erased] = i;
+				num_erased++;
+			} else {
+				// Full block of padding
+				data[i] = env->calloc(enc->block_size, sizeof(uint8_t));
+			}
 		}
+		cur_size += enc->block_size;
 	}
 	for (unsigned int i = 0; i < enc->m; i++) {
 		if (coding[i] == NULL) {
@@ -136,7 +153,7 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 			assert(data[idx] == NULL);
 			data[idx] = block;
 		} else {
-			assert(coding[idx] == NULL);
+			assert(coding[idx - enc->k] == NULL);
 			coding[idx - enc->k] = block;
 		}
 	}
@@ -192,15 +209,17 @@ rain_encode (uint8_t *rawdata, size_t rawlength,
 	// Prepare the data blocks (no copy, point to the original)
 	uint8_t *data [encoding->k];
 	size_t srcoffset = 0;
-	for (unsigned int i=0; i < encoding->k ;++i) {
-		data[i] = rawdata + srcoffset;
+	unsigned int cur_chunk = 0;
+	for (; cur_chunk < encoding->k && srcoffset < rawlength; ++cur_chunk) {
+		data[cur_chunk] = rawdata + srcoffset;
 		srcoffset += encoding->block_size;
 	}
+	// Point on the last chunk with actual data
+	--cur_chunk;
 
-	// If a padding is  necessary, replace the last data block
+	// If a padding is necessary, replace the last provided data block
 	// with a padded copy (no way to check if the original copy
 	// is long enough.
-
 	uint8_t *last_with_padding = NULL;
 	size_t tail_length = rawlength % encoding->block_size;
 	if (tail_length != 0) {
@@ -209,7 +228,11 @@ rain_encode (uint8_t *rawdata, size_t rawlength,
 		assert(last_with_padding != NULL);
 
 		memcpy(last_with_padding, rawdata+tail_offset, tail_length);
-		data[encoding->k-1] = last_with_padding;
+		data[cur_chunk] = last_with_padding;
+	}
+	// Allocate missing padding chunks
+	for (++cur_chunk; cur_chunk < encoding->k; ++cur_chunk) {
+		data[cur_chunk] = (uint8_t*) env->calloc(encoding->block_size, sizeof(uint8_t));
 	}
 
 	// Compute now ... damned, no return code to check

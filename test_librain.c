@@ -191,8 +191,12 @@ test_roundtrip (size_t length, const char *algo, unsigned int k, unsigned int m)
 	gen.deleted = alloca((k+m+1) * sizeof(int));
 	for (size_t i=0; i<m ;++i)
 		gen.parity[i] = NULL;
-	for (size_t i=0; i<k ;++i)
-		gen.data[i] = buf + (i * enc.block_size);
+	for (size_t i=0; i<k ;++i) {
+		if (i * enc.block_size < enc.data_size)
+			gen.data[i] = buf + (i * enc.block_size);
+		else
+			gen.data[i] = NULL;
+	}
 	for (unsigned int i=0; i<(k+m+1) ;++i)
 		gen.deleted[i] = -1;
 
@@ -219,6 +223,11 @@ main(int argc, char **argv)
 			test_sizes_around (length, "liber8tion", k, 2);
 		for (unsigned int k=4; k<11 ;++k)
 			test_sizes_around (length, "crs", k, 4);
+	}
+
+	for (int size = 1; size < 5555; size += 7) {
+		test_roundtrip (size, "crs", 6, 2);
+		test_roundtrip (size, "liber8tion", 6, 2);
 	}
 
 	// Benchmark the encoding throughput
