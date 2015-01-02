@@ -1,5 +1,6 @@
 #ifndef LIBRAIN_H
 #define LIBRAIN_H 1
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -34,6 +35,7 @@ struct rain_encoding_s
 	size_t padded_data_size;
 	size_t strip_size;
 };
+
 
 int rain_get_encoding (struct rain_encoding_s *encoding, size_t rawlength,
 		unsigned int k, unsigned int m, const char *algo);
