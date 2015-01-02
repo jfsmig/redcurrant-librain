@@ -54,7 +54,8 @@ int rain_encode (uint8_t *rawdata, size_t rawlength,
 
 /** Regenerates missing data or coding chunks and returns the original data
  * (with a possible overhead of numerous '0' at its end).
- * @param data is expected to have at least enc->k slots
+ * @param data is expected to have at least enc->k slots,
+ *   and padding chunks must be provided (not NULL!)
  * @param coding is expected to have at least enc->m slots
  * @param enc cannot be NULL
  * @param env can be NULL
