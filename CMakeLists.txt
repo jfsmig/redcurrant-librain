@@ -77,6 +77,9 @@ set_target_properties(rain PROPERTIES
 		PUBLIC_HEADER "librain.h")
 target_link_libraries(rain Jerasure)
 
+add_executable(test_librain test_librain.c)
+target_link_libraries(test_librain rain rt)
+
 install(TARGETS rain
         LIBRARY DESTINATION ${LD_LIBDIR}
 		PUBLIC_HEADER DESTINATION include)
