@@ -1,15 +1,13 @@
 #ifndef LIBRAIN_H
 #define LIBRAIN_H 1
 
+#include <stdint.h>
+
 #define LIBRAIN_NOALLOC 0x01
 
 #ifdef __cplusplus
 extern "C" {
 #endif
-
-typedef unsigned long size_t;
-typedef signed long ssize_t;
-typedef unsigned char uint8_t;
 
 enum rain_algorithm_e {
 	JALG_unset = 0,
