@@ -97,14 +97,12 @@ rain_get_encoding (struct rain_encoding_s *encoding, size_t rawlength,
 }
 
 int
-rain_rehydrate(uint8_t **data, uint8_t **coding,
-		struct rain_encoding_s *enc, struct rain_env_s *env)
+rain_rehydrate_noalloc(struct rain_encoding_s *enc, uint8_t **data,
+		uint8_t **coding, int *erasures)
 {
 	assert(data != NULL);
 	assert(coding != NULL);
 	assert(enc != NULL);
-	if (!env)
-		env = &env_DEFAULT;
 
 	/* Creating coding matrix or bitmatrix */
 	int *bit_matrix=NULL, *matrix=NULL;
@@ -114,6 +112,27 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 		matrix = cauchy_good_general_coding_matrix(enc->k, enc->m, enc->w);
 		bit_matrix = jerasure_matrix_to_bitmatrix(enc->k, enc->m, enc->w, matrix);
 	}
+
+	/* Choose proper decoding method */
+	jerasure_schedule_decode_lazy(enc->k, enc->m, enc->w,
+			bit_matrix, erasures, (char**)data, (char**)coding,
+			enc->block_size, enc->packet_size, 1);
+
+	/* Freeing previously allocated memory */
+	if (bit_matrix)
+		free(bit_matrix);
+	if (matrix)
+		free(matrix);
+
+	return 1;
+}
+
+int
+rain_rehydrate(uint8_t **data, uint8_t **coding,
+		struct rain_encoding_s *enc, struct rain_env_s *env)
+{
+	if (!env)
+		env = &env_DEFAULT;
 
 	/* Finding erased chunks */
 	const unsigned int sum = enc->k + enc->m;
@@ -151,33 +170,29 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 		}
 	}
 
-	/* Choose proper decoding method */
-	jerasure_schedule_decode_lazy(enc->k, enc->m, enc->w,
-			bit_matrix, erasures, (char**)data, (char**)coding,
-			enc->block_size, enc->packet_size, 1);
+	int res = rain_rehydrate_noalloc(enc, data, coding, erasures);
 
-	/* Freeing previously allocated memory */
-	if (bit_matrix)
-		free(bit_matrix);
-	if (matrix)
-		free(matrix);
-
-	return 1;
+	/* On error, cleanup missing parts */
+	if (!res) {
+		for (unsigned int i=0; i < num_erased; i++) {
+			unsigned int idx = (unsigned int) erasures[i];
+			if (enc->k > idx) {
+				free(data[idx]);
+				data[idx] = NULL;
+			} else {
+				free(coding[idx - enc->k]);
+				coding[idx - enc->k] = NULL;
+			}
+		}
+	}
+	return res;
 }
 
 int
-rain_encode (uint8_t *rawdata, size_t rawlength,
-		struct rain_encoding_s *encoding, struct rain_env_s *env,
-		uint8_t **out)
+rain_encode_noalloc (struct rain_encoding_s *encoding, uint8_t **data,
+		uint8_t **parity)
 {
 	assert(encoding != NULL);
-	assert(rawdata != NULL);
-	assert(rawlength > 0);
-
-	int padding_chunks = 0;
-
-	if (!env)
-		env = &env_DEFAULT;
 
 	// Prepare the jerasure structures
 	int *bit_matrix=NULL, *matrix=NULL, **schedule=NULL;
@@ -195,6 +210,31 @@ rain_encode (uint8_t *rawdata, size_t rawlength,
 		schedule = jerasure_smart_bitmatrix_to_schedule(
 				encoding->k, encoding->m, encoding->w, bit_matrix);
 	}
+
+	// Compute now ... damned, no return code to check
+	jerasure_schedule_encode(encoding->k, encoding->m, encoding->w, schedule,
+			(char**) data, (char**) parity,
+			encoding->block_size, encoding->packet_size);
+
+	if (schedule)
+		jerasure_free_schedule(schedule);
+	if (bit_matrix)
+		free(bit_matrix);
+	if (matrix)
+		free(matrix);
+
+	return 1;
+}
+
+int
+rain_encode (uint8_t *rawdata, size_t rawlength,
+		struct rain_encoding_s *encoding, struct rain_env_s *env,
+		uint8_t **out)
+{
+	int padding_chunks = 0;
+
+	if (!env)
+		env = &env_DEFAULT;
 
 	// Prepare the empty parity blocks
 	uint8_t *parity [encoding->m];
@@ -231,10 +271,7 @@ rain_encode (uint8_t *rawdata, size_t rawlength,
 		padding_chunks++; // count padding chunks for easy deallocation
 	}
 
-	// Compute now ... damned, no return code to check
-	jerasure_schedule_encode(encoding->k, encoding->m, encoding->w, schedule,
-			(char**) data, (char**) parity,
-			encoding->block_size, encoding->packet_size);
+	int res = rain_encode_noalloc(encoding, data, parity);
 
 	// Free allocated structures
 	if (last_with_padding)
@@ -243,17 +280,16 @@ rain_encode (uint8_t *rawdata, size_t rawlength,
 		env->free(data[encoding->k - padding_chunks]);
 		data[encoding->k - padding_chunks] = NULL;
 	}
-	if (schedule)
-		jerasure_free_schedule(schedule);
-	if (bit_matrix)
-		free(bit_matrix);
-	if (matrix)
-		free(matrix);
 
-	for (unsigned int i=0; i<encoding->m ;++i)
-		out[i] = parity[i];
+	if (res) {
+		for (unsigned int i=0; i<encoding->m ;++i)
+			out[i] = parity[i];
+	} else {
+		for (unsigned int i=0; i<encoding->m ;++i)
+			env->free(parity[i]);
+	}
 
-	return 1;
+	return res;
 }
 
 #ifndef HAVE_NOLEGACY

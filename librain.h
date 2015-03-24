@@ -1,5 +1,8 @@
 #ifndef LIBRAIN_H
 #define LIBRAIN_H 1
+
+#define LIBRAIN_NOALLOC 0x01
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -25,16 +28,25 @@ struct rain_env_s
 struct rain_encoding_s
 {
 	size_t packet_size;
-	size_t block_size;
+	size_t block_size; /**< The size of data or parity blocks */
 	unsigned int w, k, m;
 	enum rain_algorithm_e algo;
 
-	// for debug purpose
 	size_t data_size;
-	size_t padded_data_size;
+	size_t padded_data_size; /**< The size of original data + padding */
 	size_t strip_size;
 };
 
+/**
+ * Prepare a RAIN computation.
+ *
+ * @param encoding pointer to an already allocated (struct rain_encoding_s)
+ * @param rawlength the length of data that will be encoded or rehydrated
+ * @param k the number of data blocks
+ * @param m the number of parity blocks
+ * @param algo the name of a RAIN algorithm ("liber8tion" or "crs")
+ * @return 0 on error (errno is set)
+ */
 int rain_get_encoding (struct rain_encoding_s *encoding, size_t rawlength,
 		unsigned int k, unsigned int m, const char *algo);
 
@@ -52,6 +64,22 @@ int rain_encode (uint8_t *rawdata, size_t rawlength,
 		struct rain_encoding_s *enc, struct rain_env_s *env,
 		uint8_t **out);
 
+/** Fills 'out' with an array of coding chunks resulting from the parity
+ * computation of data block. This function does not allocate memory
+ * (except for its internal use), you have to provide the output
+ * memory blocks.
+ *
+ * @param enc a non-NULL (struct rain_encoding_s *) pointer.
+ * @param data must have at least enc->k slots
+ *   of size enc->block_size bytes. If your data is shorter,
+ *   pad with zeroes.
+ * @param out must have at least enc->m preallocated slots
+ *   of size enc->block_size bytes.
+ * @return a boolean value, false if it failed
+ */
+int rain_encode_noalloc (struct rain_encoding_s *enc, uint8_t **data,
+		uint8_t **out);
+
 /** Regenerates missing data or coding chunks and returns the original data
  * (with a possible overhead of numerous '0' at its end).
  * @param data is expected to have at least enc->k slots,
@@ -61,8 +89,25 @@ int rain_encode (uint8_t *rawdata, size_t rawlength,
  * @param env can be NULL
  * @return a boolean value, false if it failed
  */
-int rain_rehydrate(uint8_t **data, uint8_t **coding,
+int rain_rehydrate (uint8_t **data, uint8_t **coding,
 		struct rain_encoding_s *enc, struct rain_env_s *env);
+
+/** Regenerates missing data or parity blocks. This function
+ * does not allocate memory (except for its internal use),
+ * you have to provide the output memory blocks.
+ *
+ * @param enc a non-NULL (struct rain_encoding_s *) pointer.
+ * @param data must have at least enc->k slots
+ *   of size enc->block_size bytes.
+ * @param parity must have at least enc->m slots
+ *   of size enc->block_size bytes.
+ * @param erasures an array of integers, with indices
+ *   of missing blocks (0 to enc->k-1 for data,
+ *   enc->k to enc->k+enc->m-1 for parity), and a final -1.
+ * @return a boolean value, false if it failed
+ */
+int rain_rehydrate_noalloc (struct rain_encoding_s *enc, uint8_t **data,
+		uint8_t **parity, int *erasures);
 
 #ifndef HAVE_NOLEGACY
 /* Legacy interface */
