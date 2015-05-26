@@ -4,8 +4,8 @@ jerasure wrapper for Redcurrant's erasure code.
 
 ## Dependencies
 
-* https://bitbucket.org/jimplank/gf-complete
-* https://bitbucket.org/jimplank/jerasure
+* http://lab.jerasure.org/jerasure/gf-complete
+* http://lab.jerasure.org/jerasure/jerasure
 
 ## Installation
 
