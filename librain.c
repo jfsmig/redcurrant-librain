@@ -96,14 +96,23 @@ rain_get_encoding (struct rain_encoding_s *encoding, size_t rawlength,
 	return encoding_prepare(encoding, algo, k, m, rawlength);
 }
 
-int
-rain_rehydrate_noalloc(struct rain_encoding_s *enc, uint8_t **data,
+static int
+is_recoverable(struct rain_encoding_s *enc, int *erasures)
+{
+	unsigned int num_erased = 0;
+	if (erasures == NULL)
+		return 0;
+	while (erasures[num_erased] != -1 && num_erased <= enc->m)
+		num_erased++;
+	if (num_erased > enc->m)
+		return 0;
+	return 1;
+}
+
+static int
+do_rehydrate(struct rain_encoding_s *enc, uint8_t **data,
 		uint8_t **coding, int *erasures)
 {
-	assert(data != NULL);
-	assert(coding != NULL);
-	assert(enc != NULL);
-
 	/* Creating coding matrix or bitmatrix */
 	int *bit_matrix=NULL, *matrix=NULL;
 	if (enc->algo == JALG_liberation)
@@ -125,6 +134,19 @@ rain_rehydrate_noalloc(struct rain_encoding_s *enc, uint8_t **data,
 		free(matrix);
 
 	return 1;
+}
+
+int
+rain_rehydrate_noalloc(struct rain_encoding_s *enc, uint8_t **data,
+		uint8_t **coding, int *erasures)
+{
+	assert(data != NULL);
+	assert(coding != NULL);
+	assert(enc != NULL);
+
+	if (!is_recoverable(enc, erasures))
+		return 0;
+	return do_rehydrate(enc, data, coding, erasures);
 }
 
 int
@@ -170,7 +192,7 @@ rain_rehydrate(uint8_t **data, uint8_t **coding,
 		}
 	}
 
-	int res = rain_rehydrate_noalloc(enc, data, coding, erasures);
+	int res = do_rehydrate(enc, data, coding, erasures);
 
 	/* On error, cleanup missing parts */
 	if (!res) {
