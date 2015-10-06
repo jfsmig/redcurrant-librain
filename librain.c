@@ -96,6 +96,19 @@ rain_get_encoding (struct rain_encoding_s *encoding, size_t rawlength,
 	return encoding_prepare(encoding, algo, k, m, rawlength);
 }
 
+static int
+is_recoverable(struct rain_encoding_s *enc, int *erasures)
+{
+	unsigned int num_erased = 0;
+	if (erasures == NULL)
+		return 0;
+	while (erasures[num_erased] != -1 && num_erased <= enc->m)
+		num_erased++;
+	if (num_erased > enc->m)
+		return 0;
+	return 1;
+}
+
 int
 rain_rehydrate_noalloc(struct rain_encoding_s *enc, uint8_t **data,
 		uint8_t **coding, int *erasures)
@@ -103,6 +116,9 @@ rain_rehydrate_noalloc(struct rain_encoding_s *enc, uint8_t **data,
 	assert(data != NULL);
 	assert(coding != NULL);
 	assert(enc != NULL);
+
+	if (!is_recoverable(enc, erasures))
+		return 0;
 
 	/* Creating coding matrix or bitmatrix */
 	int *bit_matrix=NULL, *matrix=NULL;
