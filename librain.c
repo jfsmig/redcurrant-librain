@@ -14,6 +14,19 @@
 
 static struct rain_env_s env_DEFAULT = { malloc, calloc, free };
 
+static void
+_encoding_from_packet_size(struct rain_encoding_s *enc, size_t p_size)
+{
+	enc->packet_size = p_size;
+	enc->strip_size = enc->packet_size * enc->w;
+	const size_t ks = enc->k * enc->strip_size;
+	if (enc->data_size > 0)
+		enc->padded_data_size = _upper_multiple(enc->data_size, ks);
+	else
+		enc->padded_data_size = ks;
+	enc->block_size = enc->padded_data_size / enc->k;
+}
+
 static int
 encoding_prepare (struct rain_encoding_s *enc,
 		const char *algo, unsigned int k, unsigned int m,
@@ -59,30 +72,22 @@ encoding_prepare (struct rain_encoding_s *enc,
 		enc->w = 4;
 	}
 
-	// Retry with intermediate values (this loop can be optimized)
-	for (size_t start = 2048; start >= 1280; start -= 256) {
-		for (size_t p_size = start; p_size >= 64; p_size /= 2) {
-			enc->packet_size = p_size;
-			enc->strip_size = enc->packet_size * enc->w;
-			const size_t ks = enc->k * enc->strip_size;
-			enc->padded_data_size = _upper_multiple(enc->data_size, ks);
-			enc->block_size = enc->padded_data_size / enc->k;
-
-			// More than a block of padding ?
-			if ((enc->padded_data_size != enc->data_size)
-				&& (enc->data_size < (enc->padded_data_size - enc->block_size)))
+	if (enc->data_size > 0) {
+		// Retry with intermediate values (this loop can be optimized)
+		for (size_t start = 2048; start >= 1280; start -= 256) {
+			for (size_t p_size = start; p_size >= 64; p_size /= 2) {
+				_encoding_from_packet_size(enc, p_size);
+				// More than a block of padding ?
+				if ((enc->padded_data_size != enc->data_size)
+						&& (enc->data_size < (enc->padded_data_size - enc->block_size)))
 					continue;
-			return 1;
+				return 1;
+			}
 		}
 	}
 
 	// We will have more than one block of padding, but it will work
-	enc->packet_size = 64;
-	enc->strip_size = enc->packet_size * enc->w;
-	const size_t ks = enc->k * enc->strip_size;
-	enc->padded_data_size = _upper_multiple(enc->data_size, ks);
-	enc->block_size = enc->padded_data_size / enc->k;
-
+	_encoding_from_packet_size(enc, 64);
 	return 1;
 }
 
